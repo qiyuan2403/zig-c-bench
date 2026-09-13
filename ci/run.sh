@@ -124,6 +124,41 @@ rm -rf "$R/cases/heavy/zig/.zig-cache" "$R/cases/heavy/zig/app"
 runpar "heavy/Zig-Debug"   "$R/cases/heavy/zig" "$Z17" build-exe main.zig -ODebug -femit-bin=app
 
 echo
+echo "## 后端隔离：强制 LLVM（-fllvm）vs 默认后端"
+echo "# 目的：aarch64 上只有 LLVM 后端可用；必须拿到 x86_64 同后端数据，才能区分"
+echo "#       '平台/CPU 差异' 与 '后端差异'（x86_64 的 Debug 默认走自研后端）"
+mkdir -p "$R/tmp"
+for opt in "-OReleaseFast" "-ODebug"; do
+  rm -rf "$R/tmp/.zig-cache"
+  run "backend/tiny-default$opt" "$R/tmp" "$Z17" build-exe tiny.zig "$opt" -femit-bin=bd
+  rm -rf "$R/tmp/.zig-cache"
+  run "backend/tiny-FLLVM$opt"   "$R/tmp" "$Z17" build-exe tiny.zig "$opt" -fllvm -femit-bin=bf
+done
+for cs in light mid; do
+  d="$R/cases/$cs/zig"
+  rm -rf "$d/.zig-cache" "$d/app"
+  run "backend/$cs-FLLVM-ReleaseFast" "$d" "$Z17" build-exe main.zig -OReleaseFast -fllvm -femit-bin=app
+  rm -rf "$d/.zig-cache" "$d/app"
+  run "backend/$cs-FLLVM-Debug" "$d" "$Z17" build-exe main.zig -ODebug -fllvm -femit-bin=app
+done
+
+# zig cc 把同一份 C 源码编到不同目标，隔离 LLVM 后端自身在两平台的表现
+if [ -f "$R/sqlite/sqlite3.c" ]; then
+  run "backend/zigcc-native"  "$R/sqlite" "$Z17" cc -O2 -c sqlite3.c -o /tmp/z1.o
+  run "backend/zigcc-aarch64" "$R/sqlite" "$Z17" cc -O2 -target aarch64-linux-gnu -c sqlite3.c -o /tmp/z2.o
+fi
+
+echo
+echo "## 同类语言对比：Rust（也要链 std，但 std 是预编译 rlib）"
+for spec in "light 2 8 6" "mid 12 10 20"; do
+  set -- $spec
+  python3 "$R/gen/gen.py" rust "$R/cases/$1/rust" "$2" "$3" "$4" >/dev/null
+  d="$R/cases/$1/rust"
+  rm -f "$d/app"
+  run "$1/rust/clean" "$d" rustc --edition 2021 main.rs -C opt-level=3 -o app
+done
+
+echo
 echo "## 单次编译的固定开销（空程序）"
 T="$R/tmp"; mkdir -p "$T"
 printf 'pub fn main() void {}\n' > "$T/tiny.zig"

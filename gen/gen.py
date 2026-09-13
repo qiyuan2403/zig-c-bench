@@ -198,12 +198,85 @@ def gen_zig(nmods, funcs, steps):
     return out
 
 
+
+# ---------------- Rust ----------------
+def rs_stmt(p, mi, fi, k):
+    idx = f"(a + {k * 13} + b * {k + 1})"
+    coef = (k % 9) + 2
+    const = (k * 31) % 97
+    mask = 1 << (1 + (const % 5))
+    if p == 0:
+        return [f"    acc = acc.wrapping_add(s.buf[(({idx}) & 63) as usize].wrapping_mul({coef}));"]
+    if p == 1:
+        return [f"    s.buf[((b + {k * 5}) & 63) as usize] = acc.wrapping_add({const});"]
+    if p == 2:
+        return [
+            f"    if acc & {mask} != 0 {{",
+            f"        acc = acc.wrapping_add({coef * 11});",
+            "    } else {",
+            f"        acc = acc.wrapping_sub({const});",
+            "    }",
+        ]
+    if p == 3:
+        return [f"    acc = (acc << {1 + (k % 3)}).wrapping_add({const});"]
+    return [f"    for j in 0..4 {{ acc = acc.wrapping_add(s.buf[((j + {k}) & 63) as usize]); }}"]
+
+
+def rs_fn(mi, fi, steps):
+    out = [f"    #[inline(never)]",
+           f"    pub fn f{fi:02d}(s: &mut BenchState, a: i32, b: i32) -> i32 {{",
+           "        let mut acc: i32 = (a.wrapping_mul(3)) ^ (b.wrapping_add(7));",
+           "        acc = acc.wrapping_add(s.counter.wrapping_mul(5));"]
+    for k in range(steps):
+        out += rs_stmt(pattern_of(mi, fi, k), mi, fi, k)
+    out += ["        s.counter = acc & 0xffff;",
+            "        s.total ^= acc;",
+            "        unsafe { G_SINK = (G_SINK.wrapping_add(acc)) & 0x7fffffff; }",
+            "        acc",
+            "    }"]
+    return "\n".join(out) + "\n"
+
+
+def gen_rust(nmods, funcs, steps):
+    out = {}
+    out["common.rs"] = (
+        "pub const BENCH_BUF: usize = 64;\n"
+        f"pub const BENCH_MODS: usize = {nmods};\n\n"
+        "pub static mut G_SINK: i32 = 0;\n\n"
+        "#[derive(Clone, Copy)]\n"
+        "pub struct BenchState {\n"
+        "    pub buf: [i32; BENCH_BUF],\n"
+        "    pub counter: i32,\n"
+        "    pub total: i32,\n"
+        "}\n\n"
+        "impl BenchState {\n"
+        "    pub fn new() -> Self { BenchState { buf: [0; BENCH_BUF], counter: 0, total: 0 } }\n"
+        "}\n"
+    )
+    out["main.rs"] = "mod common;\n" + "".join(f"mod m{mi:02d};\n" for mi in range(nmods)) + "\nuse common::*;\n\npub fn main() {\n    let mut total: i32 = 0;\n" + "".join(f"    let mut s{mi} = BenchState::new();\n" for mi in range(nmods)) + "    for _ in 0..8 {\n" + "".join(f"        total = total.wrapping_add(m{mi:02d}::entry(&mut s{mi}));\n" for mi in range(nmods)) + "    }\n    println!(\"checksum={} sink={}\", total, unsafe { G_SINK });\n}\n"
+    for mi in range(nmods):
+        body = ["use crate::common::*;", "", f"pub struct Mod{mi};", "", f"impl Mod{mi} {{"]
+        for fi in range(funcs):
+            body.append(rs_fn(mi, fi, steps))
+        body.append(f"    pub fn run(s: &mut BenchState) -> i32 {{")
+        body.append("        let mut acc: i32 = 0;")
+        for fi in range(funcs):
+            body.append(f"        acc = acc.wrapping_add(Mod{mi}::f{fi:02d}(s, acc, {fi + 1}));")
+        body.append("        acc")
+        body.append("    }")
+        body.append("}")
+        body.append("")
+        body.append(f"pub fn entry(s: &mut BenchState) -> i32 {{ Mod{mi}::run(s) }}")
+        out[f"m{mi:02d}.rs"] = "\n".join(body) + "\n"
+    return out
+
+
 def count_lines(files):
     return sum(v.count("\n") for v in files.values())
 
 
 def build(lang, nmods, funcs, steps, outdir):
-    gen = gen_c if lang == "c" else gen_zig
+    gen = {"c": gen_c, "zig": gen_zig, "rust": gen_rust}[lang]
     files = gen(nmods, funcs, steps)
     os.makedirs(outdir, exist_ok=True)
     for name, content in files.items():
