@@ -3,7 +3,7 @@ name: zig-c-bench
 on:
   workflow_dispatch:
   push:
-    branches: [main]
+    branches: [master, main]
 
 jobs:
   bench:
