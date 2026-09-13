@@ -1,0 +1,11 @@
+cases/
+results/
+tmp/
+diag/
+zig016/
+zig017/
+sqlite/
+*.o
+app
+zig-out/
+.zig-cache/

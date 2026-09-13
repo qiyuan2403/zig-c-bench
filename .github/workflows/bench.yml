@@ -1,0 +1,53 @@
+name: zig-c-bench
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+
+jobs:
+  bench:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 环境信息
+        run: |
+          nproc
+          grep -m1 'model name' /proc/cpuinfo
+          free -m | head -2
+          uname -a
+
+      - name: 下载 Zig（0.17-dev master + 0.16.0 稳定，均为 x86_64-linux）
+        run: |
+          set -euo pipefail
+          curl -sSL https://ziglang.org/download/index.json -o /tmp/idx.json
+          python3 - <<'PY' > /tmp/urls.txt
+          import json
+          d = json.load(open('/tmp/idx.json'))
+          print(d['master']['x86_64-linux']['tarball'])
+          print(d['0.16.0']['x86_64-linux']['tarball'])
+          PY
+          mapfile -t U < /tmp/urls.txt
+          echo "master: ${U[0]}"
+          echo "0.16.0: ${U[1]}"
+          curl -sSL "${U[0]}" -o /tmp/z17.tar.xz
+          curl -sSL "${U[1]}" -o /tmp/z16.tar.xz
+          mkdir -p zig017 zig016
+          tar -xf /tmp/z17.tar.xz -C zig017 --strip-components=1
+          tar -xf /tmp/z16.tar.xz -C zig016 --strip-components=1
+          ./zig017/zig version
+          ./zig016/zig version
+
+      - name: 下载 SQLite amalgamation（27 万行真实 C 工程）
+        run: |
+          set -euo pipefail
+          mkdir -p sqlite
+          curl -sSL "https://www.sqlite.org/2026/sqlite-amalgamation-3530400.zip" -o /tmp/sq.zip
+          unzip -o -q /tmp/sq.zip -d /tmp/sqdir
+          cp /tmp/sqdir/*/sqlite3.c sqlite/
+          wc -l sqlite/sqlite3.c
+
+      - name: 跑基准
+        run: bash ci/run.sh
